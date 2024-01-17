@@ -4,6 +4,7 @@
 ========================
 """
 
+
 import os
 import json
 import boto3
@@ -30,9 +31,7 @@ def lambda_handler(event, context):
             OutputConfig={"S3Bucket": OUTPUT_BUCKET_NAME, "S3Prefix": OUTPUT_S3_PREFIX},
             NotificationChannel={"SNSTopicArn": SNS_TOPIC_ARN, "RoleArn": SNS_ROLE_ARN},
         )
-
         if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
             return {"statusCode": 200, "body": json.dumps("Job created successfully!")}
         else:
             return {"statusCode": 500, "body": json.dumps("Job creation failed!")}
-
