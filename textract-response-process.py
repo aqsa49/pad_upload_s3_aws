@@ -1,9 +1,3 @@
-"""
--*- coding: utf-8 -*-
-========================
-========================
-"""
-
 import os
 import json
 import boto3
@@ -17,12 +11,21 @@ def lambda_handler(event, context):
 
     job_id = json.loads(event["Records"][0]["Sns"]["Message"])["JobId"]
 
-    document_data = process_response(job_id)
+    page_lines, annotations = process_response(job_id)
 
-    # Convert the document_data dictionary to a DataFrame
-    df = pd.DataFrame(document_data)
+    # Exclude the page number
+    page_lines = {page: text for page, text in page_lines.items() if not text.isdigit()}
+
+    # Add annotations to page_lines
+    for page, annotation_text in annotations.items():
+        if page in page_lines:
+            page_lines[page] += f" {annotation_text}"
+        else:
+            page_lines[page] = annotation_text
 
     csv_key_name = f"{job_id}.csv"
+    df = pd.DataFrame(page_lines.items())
+    df.columns = ["PageNo", "Text"]
     df.to_csv(f"/tmp/{csv_key_name}", index=False)
 
     upload_to_s3(f"/tmp/{csv_key_name}", BUCKET_NAME, f"{PREFIX}/{csv_key_name}")
@@ -39,28 +42,40 @@ def upload_to_s3(filename, bucket, key):
 def process_response(job_id):
     textract = boto3.client("textract")
 
-    response = []
+    response = {}
     pages = []
 
     response = textract.get_document_text_detection(JobId=job_id)
+
     pages.append(response)
 
-    next_token = response.get("NextToken")
-    while next_token:
-        response = textract.get_document_text_detection(JobId=job_id, NextToken=next_token)
-        pages.append(response)
-        next_token = response.get("NextToken")
+    nextToken = None
+    if "NextToken" in response:
+        nextToken = response["NextToken"]
 
-    document_data = {"PageNo": [], "BlockType": [], "Text": []}
+    while nextToken:
+        response = textract.get_document_text_detection(
+            JobId=job_id, NextToken=nextToken
+        )
+        pages.append(response)
+        nextToken = None
+        if "NextToken" in response:
+            nextToken = response["NextToken"]
+
+    page_lines = {}
+    annotations = {}
 
     for page in pages:
         for item in page["Blocks"]:
-            block_type = item["BlockType"]
-            text = item.get("Text", "")
+            if item["BlockType"] == "LINE":
+                if item["Page"] in page_lines:
+                    page_lines[item["Page"]] += f" {item['Text']}"  # Concatenate the text
+                else:
+                    page_lines[item["Page"]] = item["Text"]
+            elif item["BlockType"] == "ANNOTATION":
+                if item["Page"] in annotations:
+                    annotations[item["Page"]] += f" {item['Text']}"  # Concatenate annotation text
+                else:
+                    annotations[item["Page"]] = item["Text"]
 
-            document_data["PageNo"].append(item["Page"])
-            document_data["BlockType"].append(block_type)
-            document_data["Text"].append(text)
-
-    return document_data
-
+    return page_lines, annotations
